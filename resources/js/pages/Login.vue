@@ -5,7 +5,7 @@
       
       <!-- Logo -->
       <div class="flex justify-center mb-6">
-        <img src="/logo.png" alt="Logo" class="w-20 h-20" />
+        <img src="#" alt="Logo" class="w-20 h-20" />
       </div>
 
       <!-- Title -->
