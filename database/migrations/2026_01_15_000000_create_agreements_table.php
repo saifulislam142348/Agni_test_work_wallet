@@ -11,16 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('wallets', function (Blueprint $table) {
+        Schema::create('agreements', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
-            $table->decimal('balance', 15, 2)->default(0.00);
-            $table->string('currency', 3)->default('BDT');
-            $table->boolean('is_active')->default(true);
+            $table->string('agreement_id')->unique(); // The bKash Agreement ID
+            $table->string('payer_reference'); // Masked phone number e.g. 017***123
+            $table->string('status')->default('Active'); // Active, Incomplete, Cancelled
             $table->timestamps();
-
-            // Ensure one wallet per user for this system
-            $table->unique('user_id');
         });
     }
 
@@ -29,6 +26,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('wallets');
+        Schema::dropIfExists('agreements');
     }
 };
