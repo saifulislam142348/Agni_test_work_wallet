@@ -83,8 +83,16 @@ export default {
         async downloadStatement() {
             try {
                 const res = await axios.get('/wallet/statement/download', {
-                    responseType: 'blob'
+                    responseType: 'blob' // Important: Axios treats JSON error as blob too if 503
                 });
+                
+                // If it's a JSON error blob (service unavailable)
+                if (res.data.type === 'application/json') {
+                    const error = JSON.parse(await res.data.text());
+                    alert('⚠️ ' + (error.message || error.error));
+                    return;
+                }
+
                 const url = window.URL.createObjectURL(new Blob([res.data]));
                 const link = document.createElement('a');
                 link.href = url;
@@ -92,7 +100,18 @@ export default {
                 document.body.appendChild(link);
                 link.click();
             } catch (error) {
-                alert('Failed to download statement');
+                // If response is a blob (from 503), read it
+                if (error.response && error.response.data instanceof Blob) {
+                     const errorText = await error.response.data.text();
+                     try {
+                        const errorJson = JSON.parse(errorText);
+                        alert('⚠️ Service Error: ' + errorJson.message);
+                     } catch(e) {
+                        alert('Failed to download statement: Service Unavailable');
+                     }
+                } else {
+                    alert('Failed to download statement.');
+                }
             }
         },
         formatDate(date) {

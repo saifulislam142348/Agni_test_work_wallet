@@ -55,16 +55,23 @@ class WalletController extends Controller
         return response()->json($transactions);
     }
 
-    /**
-     * Step 1: Link Wallet (Create Agreement)
-     */
+
     public function linkWallet(Request $request)
     {
-        $callbackUrl = route('api.bkash.agreement.callback'); // Define this route
+        // Standard Callback URL (Public)
+        $callbackUrl = route('api.bkash.agreement.callback');
         
         try {
             $response = $this->bkash->createAgreement($callbackUrl);
-            if (isset($response['bkashURL'])) {
+            
+            if (isset($response['bkashURL']) && isset($response['paymentID'])) {
+                // Cache the PaymentID -> UserID mapping for 30 minutes
+                \Illuminate\Support\Facades\Cache::put(
+                    'bkash_agreement_' . $response['paymentID'], 
+                    $request->user()->id, 
+                    now()->addMinutes(30)
+                );
+
                 return response()->json(['redirect_url' => $response['bkashURL']]);
             }
             return response()->json(['error' => 'Failed to initiate agreement', 'details' => $response], 400);
@@ -81,9 +88,15 @@ class WalletController extends Controller
         $status = $request->status;
         $paymentId = $request->paymentID;
 
-        if ($status !== 'success') {
-             // In a real app, redirect to frontend with error
-            return response()->json(['status' => 'failed', 'message' => 'Agreement failed or cancelled']);
+        if ($status !== 'success' || !$paymentId) {
+             return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?agreement_status=failed&error=Agreement+Cancelled');
+        }
+
+        // Retrieve User ID from Cache
+        $userId = \Illuminate\Support\Facades\Cache::get('bkash_agreement_' . $paymentId);
+
+        if (!$userId) {
+            return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?agreement_status=failed&error=Session+Expired+or+Invalid+Payment');
         }
 
         try {
@@ -91,19 +104,9 @@ class WalletController extends Controller
             $result = $this->bkash->executeAgreement($paymentId);
 
             if (isset($result['agreementID'])) {
-                // Store Agreement
-                // In API, we might not have auth context if this is a direct browser callback. 
-                // Usually bKash callbacks need to handle session/auth. 
-                // For simplicity, we assume we can identify user or this is an API call.
-                // NOTE: In a decoupled frontend, this callback is tricky. 
-                // Ideally, frontend handles the redirect and calls backend with parameters.
-                // We will assume the frontend sends the parameters to this endpoint.
-                
-                // If this method is called by the Frontend after it receives params from bKash:
-                $user = $request->user();
                 
                 Agreement::updateOrCreate(
-                    ['user_id' => $user->id],
+                    ['user_id' => $userId],
                     [
                         'agreement_id' => $result['agreementID'],
                         'payer_reference' => $result['payerReference'],
@@ -111,13 +114,17 @@ class WalletController extends Controller
                     ]
                 );
 
-                return response()->json(['status' => 'success', 'message' => 'Wallet linked successfully']);
+                // Clear Cache
+                \Illuminate\Support\Facades\Cache::forget('bkash_agreement_' . $paymentId);
+
+                // Redirect to Frontend Dashboard
+                return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?agreement_status=success');
             }
 
-            return response()->json(['error' => 'Agreement execution failed', 'details' => $result], 400);
+            return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?agreement_status=failed&error=Execution+Failed');
 
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?agreement_status=failed&error=System+Error');
         }
     }
 
@@ -136,12 +143,6 @@ class WalletController extends Controller
             return response()->json(['error' => 'No active bKash agreement found'], 400);
         }
 
-        // REDIS LOCK
-        $lockKey = $this->walletService->acquireLock($user->id);
-        if (!$lockKey) {
-            return response()->json(['error' => 'Duplicate request. Please wait.'], 429);
-        }
-
         try {
             $merchantInvoice = 'INV-' . Str::upper(Str::random(10));
             $callbackUrl = route('api.bkash.payment.callback'); 
@@ -154,38 +155,91 @@ class WalletController extends Controller
                 $callbackUrl
             );
 
-            if (!isset($createRes['paymentID'])) {
-                throw new \Exception('Failed to create payment');
-            }
-
-            // Execute Payment immediately (since it's agreement based, often auto-captured or requires simple execute)
-            // Note: For Payment with Agreement, user authorization might be needed if it's the first time or high amount.
-            // But usually "Grant Token" flow is strictly for Agreement. 
-            // Here we just Execute.
-            
-            $execRes = $this->bkash->executePayment($createRes['paymentID']);
-
-            if (isset($execRes['trxID'])) {
-                // SUCCESS - Credit Wallet
-                $this->walletService->credit(
-                    $user,
-                    $amount,
-                    $execRes['trxID'],
-                    $createRes['paymentID'],
-                    'Added money via bKash',
-                    $execRes
+            if (isset($createRes['bkashURL']) && isset($createRes['paymentID'])) {
+                 // Cache the PaymentID -> UserID mapping for 30 minutes for the callback
+                 \Illuminate\Support\Facades\Cache::put(
+                    'bkash_payment_' . $createRes['paymentID'], 
+                    $user->id, 
+                    now()->addMinutes(30)
+                );
+                
+                // Also cache the amount for verification if needed, or rely on execution response
+                \Illuminate\Support\Facades\Cache::put(
+                    'bkash_payment_amount_' . $createRes['paymentID'], 
+                    $amount, 
+                    now()->addMinutes(30)
                 );
 
-                return response()->json(['status' => 'success', 'balance' => $user->wallet->fresh()->balance]);
+                return response()->json(['redirect_url' => $createRes['bkashURL']]);
             }
 
-            return response()->json(['error' => 'Payment failed', 'details' => $execRes], 400);
+            return response()->json(['error' => 'Payment creation failed', 'details' => $createRes], 400);
 
         } catch (\Exception $e) {
             Log::error($e);
             return response()->json(['error' => $e->getMessage()], 500);
-        } finally {
-            $this->walletService->releaseLock($lockKey);
+        }
+    }
+
+    /**
+     * Step 3b: Payment Callback (Execute)
+     */
+    public function paymentCallback(Request $request)
+    {
+        $status = $request->status;
+        $paymentId = $request->paymentID;
+
+        if ($status !== 'success' || !$paymentId) {
+             return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?payment_status=failed&error=Payment+Cancelled');
+        }
+
+        // Retrieve User ID from Cache
+        $userId = \Illuminate\Support\Facades\Cache::get('bkash_payment_' . $paymentId);
+        $amount = \Illuminate\Support\Facades\Cache::get('bkash_payment_amount_' . $paymentId);
+
+        if (!$userId) {
+            return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?payment_status=failed&error=Session+Expired');
+        }
+
+        $user = User::find($userId);
+
+        try {
+            // Execute Payment
+            $execRes = $this->bkash->executePayment($paymentId);
+
+            if (isset($execRes['trxID'])) {
+                
+                // REDIS LOCK for Credit (Prevent Double Credit if callback hits twice - though cache clear helps)
+                $lockKey = $this->walletService->acquireLock($userId);
+                
+                if ($lockKey) {
+                    try {
+                        // Check if already credited (idempotency check via trxID if stored, but here we trust flow for now)
+                        $this->walletService->credit(
+                            $user,
+                            $execRes['amount'] ?? $amount, // Use amount from response as truth, fallback to cache
+                            $execRes['trxID'],
+                            $paymentId,
+                            'Added money via bKash',
+                            $execRes
+                        );
+                    } finally {
+                        $this->walletService->releaseLock($lockKey);
+                    }
+                }
+
+                // Clear Cache
+                \Illuminate\Support\Facades\Cache::forget('bkash_payment_' . $paymentId);
+                \Illuminate\Support\Facades\Cache::forget('bkash_payment_amount_' . $paymentId);
+
+                return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?payment_status=success');
+            }
+
+            return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?payment_status=failed&error=Execution+Failed');
+
+        } catch (\Exception $e) {
+            Log::error($e);
+            return redirect(env('APP_FRONTEND_URL', 'http://localhost:5173') . '/dashboard?payment_status=failed&error=System+Error');
         }
     }
 
@@ -196,18 +250,26 @@ class WalletController extends Controller
     {
         $user = $request->user();
         $transactions = $user->wallet->transactions()->latest()->get(); 
-
+        
         $data = [
             'user' => $user,
             'transactions' => $transactions,
             'date' => now()->toDayDateTimeString(),
         ];
 
-        // Need a view 'documents.statement'
-        $pdfContent = $this->statementService->generateStatementPdf('documents.statement', $data);
+        try {
+            // Need a view 'documents.statement'
+            $pdfContent = $this->statementService->generateStatementPdf('documents.statement', $data);
 
-        return response($pdfContent)
-            ->header('Content-Type', 'application/pdf')
-            ->header('Content-Disposition', 'attachment; filename="statement.pdf"');
+            return response($pdfContent)
+                ->header('Content-Type', 'application/pdf')
+                ->header('Content-Disposition', 'attachment; filename="statement.pdf"');
+        } catch (\Throwable $e) {
+            Log::error('PDF Statement Error: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'PDF Service Unavailable', 
+                'message' => 'The PDF generation service is not responding. Please make sure Docker is running.'
+            ], 503);
+        }
     }
 }

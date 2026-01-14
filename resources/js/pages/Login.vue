@@ -58,14 +58,17 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 const form = reactive({
-  email: '',
-  password: ''
+  email: 'test@example.com',
+  password: 'password'
 })
 
 const login = async () => {
   try {
     const res = await axios.post('/login', form)
-    // store token or session if needed
+    localStorage.setItem('token', res.data.access_token)
+    // Optional: Store user info if needed
+    // localStorage.setItem('user', JSON.stringify(res.data.user))
+    
     router.push('/dashboard')
   } catch (err) {
     alert('Login failed')

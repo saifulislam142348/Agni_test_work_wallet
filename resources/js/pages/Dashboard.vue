@@ -49,16 +49,44 @@
         </main>
 
         <!-- Add Money Modal -->
-        <div v-if="showAddMoneyModal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-            <div class="bg-white rounded-lg p-8 w-96 shadow-xl">
+        <div v-if="showAddMoneyModal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 transition-opacity duration-300">
+            <div class="bg-white rounded-lg p-8 w-96 shadow-xl transform transition-all scale-100">
                 <h3 class="text-lg font-bold mb-4">{{ t.add_money }}</h3>
-                <input v-model="amount" type="number" placeholder="Amount (BDT)" class="w-full border p-2 rounded mb-4" />
+                
+                <div class="mb-4">
+                    <input 
+                        v-model="amount" 
+                        type="number" 
+                        placeholder="Amount (BDT)" 
+                        class="w-full border p-2 rounded focus:ring-2 focus:ring-pink-500 outline-none transition"
+                        :class="{'border-red-500': errors.amount}"
+                    />
+                    <p v-if="errors.amount" class="text-red-500 text-sm mt-1">{{ errors.amount }}</p>
+                </div>
+
                 <div class="flex justify-end space-x-2">
-                    <button @click="showAddMoneyModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
-                    <button @click="addMoney" :disabled="loading" class="px-4 py-2 bg-pink-600 text-white rounded hover:bg-pink-700">
-                        {{ loading ? t.processing : 'Confirm' }}
+                    <button @click="showAddMoneyModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded transition">Cancel</button>
+                    <button @click="addMoney" :disabled="loading" class="px-4 py-2 bg-pink-600 text-white rounded hover:bg-pink-700 shadow transition flex items-center">
+                        <svg v-if="loading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        {{ loading ? t.processing : t.proceed_payment }}
                     </button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div v-if="flash.show" class="fixed top-20 right-5 z-50">
+            <div :class="{
+                'bg-green-500': flash.type === 'success',
+                'bg-red-500': flash.type === 'error'
+            }" class="text-white px-6 py-4 rounded shadow-lg flex items-center space-x-2 animate-bounce-in">
+                <span class="font-bold text-lg" v-if="flash.type === 'success'">✓</span>
+                <span class="font-bold text-lg" v-if="flash.type === 'error'">✕</span>
+                <span>{{ flash.message }}</span>
+                <button @click="flash.show = false" class="ml-4 opacity-75 hover:opacity-100 font-bold">×</button>
             </div>
         </div>
 
@@ -80,7 +108,17 @@ export default {
             agreementPhone: null,
             showAddMoneyModal: false,
             amount: '',
-            loading: false
+            loading: false,
+            // Flash Message State
+            flash: {
+                show: false,
+                message: '',
+                type: 'success' // success, error
+            },
+            // Validation Errors
+            errors: {
+                amount: ''
+            }
         }
     },
     computed: {
@@ -90,8 +128,51 @@ export default {
     },
     mounted() {
         this.fetchDashboard();
+        this.handleUrlParams();
     },
     methods: {
+        handleUrlParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const url = new URL(window.location);
+            let dirty = false;
+
+            // 1. Agreement Status
+            if (urlParams.get('agreement_status') === 'success') {
+                this.showAddMoneyModal = true;
+                this.notify(this.t.success, 'success'); // "Success" or specific text
+                url.searchParams.delete('agreement_status');
+                dirty = true;
+            } else if (urlParams.get('agreement_status') === 'failed') {
+                this.notify('Agreement Failed: ' + (urlParams.get('error') || 'Unknown'), 'error');
+                url.searchParams.delete('agreement_status');
+                url.searchParams.delete('error');
+                dirty = true;
+            }
+
+            // 2. Payment Status
+            if (urlParams.get('payment_status') === 'success') {
+                this.notify('Payment Successful! Balance Updated.', 'success');
+                url.searchParams.delete('payment_status');
+                dirty = true;
+            } else if (urlParams.get('payment_status') === 'failed') {
+                this.notify('Payment Failed: ' + (urlParams.get('error') || 'Unknown'), 'error');
+                url.searchParams.delete('payment_status');
+                url.searchParams.delete('error');
+                dirty = true;
+            }
+
+            if (dirty) {
+                window.history.replaceState({}, '', url);
+            }
+        },
+        notify(message, type = 'success') {
+            this.flash.message = message;
+            this.flash.type = type;
+            this.flash.show = true;
+            setTimeout(() => {
+                this.flash.show = false;
+            }, 5000);
+        },
         async fetchDashboard() {
             try {
                 const res = await axios.get('/wallet/dashboard');
@@ -110,32 +191,45 @@ export default {
                     window.location.href = res.data.redirect_url;
                 }
             } catch (error) {
-                alert('Link Error: ' + error.response?.data?.error || 'Unknown');
+                this.notify('Link Error: ' + (error.response?.data?.error || 'Unknown'), 'error');
             }
         },
         async addMoney() {
-            if (!this.amount) return;
+            this.errors.amount = '';
+            if (!this.amount) {
+                this.errors.amount = 'Amount is required';
+                return;
+            }
+            if (this.amount < 1) {
+                 this.errors.amount = 'Amount must be greater than 0';
+                 return;
+            }
+
             this.loading = true;
             try {
                 const res = await axios.post('/wallet/add-money', { amount: this.amount });
-                if (res.data.status === 'success') {
+                
+                if (res.data.redirect_url) {
+                    window.location.href = res.data.redirect_url;
+                } else if (res.data.status === 'success') {
                     this.balance = res.data.balance;
                     this.showAddMoneyModal = false;
                     this.amount = '';
-                    alert(this.t.success);
-                    // Reload history implies refreshing component, simplified here by page reload or event bus
+                    this.notify('Payment Successful!', 'success');
                     window.location.reload(); 
                 }
             } catch (error) {
-                alert('Payment Error: ' + (error.response?.data?.error || 'Error'));
+                const msg = error.response?.data?.error || 'Payment process failed';
+                this.notify(msg, 'error');
+                // Backend validation errors logic could go here if using 422
             } finally {
-                this.loading = false;
+               // keep loading true if redirecting
             }
         },
         toggleLocale() {
             this.locale = this.locale === 'en' ? 'bn' : 'en';
             localStorage.setItem('locale', this.locale);
-            window.location.reload(); // Simple reload to refresh all components/axios headers
+            window.location.reload();
         },
         logout() {
             localStorage.removeItem('token');
