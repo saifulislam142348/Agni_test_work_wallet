@@ -14,6 +14,8 @@ class Wallet extends Model
         'balance',
         'currency',
         'is_active',
+        'token',
+        'masked',
     ];
 
     public function user()

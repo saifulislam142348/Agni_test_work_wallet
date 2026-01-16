@@ -16,6 +16,10 @@ class Agreement extends Model
         'status',
     ];
 
+    protected $casts = [
+        'agreement_id' => 'encrypted',
+    ];
+
     public function user()
     {
         return $this->belongsTo(User::class);

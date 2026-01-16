@@ -28,8 +28,8 @@
                 </div>
                 
                 <div class="mt-6 flex space-x-4">
-                    <button @click="showAddMoneyModal = true" :disabled="!hasAgreement" 
-                        class="bg-white text-pink-600 px-6 py-2 rounded font-bold shadow hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                    <button @click="showAddMoneyModal = true" 
+                        class="bg-white text-pink-600 px-6 py-2 rounded font-bold shadow hover:bg-gray-100 transition">
                         {{ t.add_money }}
                     </button>
                     
@@ -53,6 +53,27 @@
             <div class="bg-white rounded-lg p-8 w-96 shadow-xl transform transition-all scale-100">
                 <h3 class="text-lg font-bold mb-4">{{ t.add_money }}</h3>
                 
+                <div class="mb-4">
+                    <label class="block text-sm font-bold mb-2">Select Payment Method</label>
+                    
+                    <div v-for="agm in agreements" :key="agm.id" 
+                        class="flex items-center justify-between p-3 border rounded mb-2 hover:bg-gray-50 cursor-pointer"
+                        @click="selectedAgreementId = agm.id">
+                        <div class="flex items-center">
+                             <input type="radio" v-model="selectedAgreementId" :value="agm.id" class="mr-3 text-pink-600 focus:ring-pink-500" />
+                             <span class="font-medium text-gray-700">bKash ({{ agm.payer_reference }})</span>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between p-3 border rounded hover:bg-gray-50 cursor-pointer"
+                        @click="selectedAgreementId = 'new'">
+                        <div class="flex items-center">
+                             <input type="radio" v-model="selectedAgreementId" value="new" class="mr-3 text-pink-600 focus:ring-pink-500" />
+                             <span class="font-medium text-gray-700">Add New Number</span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="mb-4">
                     <input 
                         v-model="amount" 
@@ -104,8 +125,9 @@ export default {
             locale: localStorage.getItem('locale') || 'en',
             balance: '0.00',
             currency: 'BDT',
-            hasAgreement: false,
-            agreementPhone: null,
+            agreements: [],
+            selectedAgreementId: 'new', // Default to new if empty, or specific if exists
+            
             showAddMoneyModal: false,
             amount: '',
             loading: false,
@@ -178,8 +200,14 @@ export default {
                 const res = await axios.get('/wallet/dashboard');
                 this.balance = res.data.balance;
                 this.currency = res.data.currency;
-                this.hasAgreement = res.data.has_agreement;
-                this.agreementPhone = res.data.agreement_phone;
+                this.agreements = res.data.agreements || [];
+                
+                // Pre-select first agreement if exists
+                if (this.agreements.length > 0) {
+                    this.selectedAgreementId = this.agreements[0].id; // Most recent due to DB default sort? Or check backend sort.
+                } else {
+                    this.selectedAgreementId = 'new';
+                }
             } catch (error) {
                 console.error("Dashboard error", error);
             }
@@ -207,7 +235,27 @@ export default {
 
             this.loading = true;
             try {
-                const res = await axios.post('/wallet/add-money', { amount: this.amount });
+                // Prepare Payload
+                const payload = { amount: this.amount };
+                
+                // If specific agreement selected
+                if (this.selectedAgreementId && this.selectedAgreementId !== 'new') {
+                    payload.agreement_id = this.selectedAgreementId;
+                }
+                
+                // Note: If 'new' is selected, we send NO agreement_id. 
+                // However, backend CURRENTLY defaults to "Latest" if none sent.
+                // We need to signal "FORCE NEW". 
+                // Let's add 'force_new' param if needed, OR relies on backend update?
+                // I'll update backend to respect 'force_new' or similar? 
+                // Actually, I can just call /link logic directly if 'new'?
+                // But we want the "Add Money" flow (store amount).
+                // Let's send `agreement_id: null` and `force_new: true`.
+                if (this.selectedAgreementId === 'new') {
+                    payload.force_new = true;
+                }
+
+                const res = await axios.post('/wallet/add-money', payload);
                 
                 if (res.data.redirect_url) {
                     window.location.href = res.data.redirect_url;

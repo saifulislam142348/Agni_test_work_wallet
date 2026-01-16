@@ -53,7 +53,7 @@ class BkashService
     {
         return [
             'Content-Type' => 'application/json',
-            'Authorization' => $this->getToken(),
+            'Authorization' => 'Bearer ' . $this->getToken(),
             'X-APP-Key' => $this->appKey,
         ];
     }
@@ -102,8 +102,12 @@ class BkashService
             'merchantInvoiceNumber' => $merchantInvoiceNumber,
         ];
 
+        Log::info('bKash Create Payment Payload:', $payload);
+
         $response = Http::withHeaders($this->getHeaders())
             ->post($this->baseUrl . '/tokenized/checkout/create', $payload);
+
+        Log::info('bKash Create Payment Response:', $response->json());
 
         return $response->json();
     }

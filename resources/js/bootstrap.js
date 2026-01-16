@@ -11,9 +11,23 @@ axios.interceptors.request.use(config => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
-    
+
     const locale = localStorage.getItem('locale') || 'en';
     config.headers['X-Locale'] = locale;
-    
+
     return config;
 });
+
+// Add Response Interceptor for Global Error Handling
+axios.interceptors.response.use(
+    response => response,
+    error => {
+        if (error.response && error.response.status === 401) {
+            // Unauthenticated - clear session and redirect
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.href = '/';
+        }
+        return Promise.reject(error);
+    }
+);

@@ -24,49 +24,84 @@ class UserSeeder extends Seeder
             ]
         );
 
-        $wallet = $user->wallet()->updateOrCreate(
+        $wallet = $user->wallet()->firstOrCreate(
             ['user_id' => $user->id],
             [
-                'balance' => 500.00,
+                'balance' => 0,
                 'currency' => 'BDT',
                 'is_active' => true,
             ]
         );
 
-        // Add dummy transactions for Test User
+        // Clear existing transactions for fresh seed
+        $wallet->transactions()->delete();
+
+        $runningBalance = 0;
+        $transactions = [];
+
+        // Add dummy transactions for Test User (Chronological order)
         for ($i = 0; $i < 15; $i++) {
-            $type = rand(0, 1) ? 'credit' : 'debit';
+            $isCredit = rand(0, 1);
             $amount = rand(50, 1000);
             
+            if ($isCredit) {
+                $runningBalance += $amount;
+                $type = 'credit';
+                $desc = 'Money Added';
+            } else {
+                // Ensure we don't go negative for this test
+                if ($runningBalance < $amount) {
+                    $amount = rand(10, (int)$runningBalance); // Reduce amount to fit
+                    if ($amount <= 0) { // If balance is 0 or very low, switch to credit
+                         $amount = 500;
+                         $runningBalance += $amount;
+                         $type = 'credit';
+                         $desc = 'Money Added (Auto-recharge)';
+                    } else {
+                        $runningBalance -= $amount;
+                        $type = 'debit';
+                        $desc = 'Payment for Service';
+                    }
+                } else {
+                    $runningBalance -= $amount;
+                    $type = 'debit';
+                    $desc = 'Payment for Service';
+                }
+            }
+
+            // Create Transaction
             $wallet->transactions()->create([
                 'amount' => $amount,
                 'type' => $type,
-                'trx_id' => 'TRX' . Str::upper(Str::random(8)),
-                'reference_id' => 'REF' . Str::upper(Str::random(6)),
-                'balance_after' => $wallet->balance, // Ideally calc per tx, but dummy is fine
-                'description' => $type === 'credit' ? 'Money Added' : 'Payment for Service',
-                'created_at' => now()->subDays(rand(0, 30)),
+                'trx_id' => 'TRX' . Str::upper(Str::random(10)),
+                'reference_id' => 'REF' . Str::upper(Str::random(8)),
+                'balance_after' => $runningBalance,
+                'description' => $desc,
+                'created_at' => now()->subDays(15 - $i), // Oldest first
             ]);
         }
         
+        // Update Final Wallet Balance
+        $wallet->update(['balance' => $runningBalance]);
+        
         // 2. Random Users
         User::factory(5)->create()->each(function ($u) {
+            $initialBalance = rand(100, 5000);
+            
             $w = $u->wallet()->create([
-                'balance' => rand(100, 5000),
+                'balance' => $initialBalance,
                 'currency' => 'BDT',
             ]);
 
-            // Add transactions
-            for ($j = 0; $j < 5; $j++) {
-                $w->transactions()->create([
-                    'amount' => rand(100, 500),
-                    'type' => 'credit',
-                    'trx_id' => 'TRX' . Str::upper(Str::random(8)),
-                    'balance_after' => $w->balance,
-                    'description' => 'Opening Balance',
-                    'created_at' => now()->subDays(rand(1, 10)),
-                ]);
-            }
+            // Add Opening Balance Transaction
+            $w->transactions()->create([
+                'amount' => $initialBalance,
+                'type' => 'credit',
+                'trx_id' => 'TRX' . Str::upper(Str::random(8)),
+                'balance_after' => $initialBalance,
+                'description' => 'Opening Balance',
+                'created_at' => now()->subDays(10),
+            ]);
         });
     }
 }

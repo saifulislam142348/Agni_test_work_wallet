@@ -14,24 +14,26 @@ class WalletService
     /**
      * Acquire a lock for the user's wallet to prevent concurrent double-spending.
      */
+    /**
+     * Acquire a lock for the user's wallet to prevent concurrent double-spending.
+     * Returns the lock instance if acquired, false otherwise.
+     */
     public function acquireLock($userId, $ttl = 10)
     {
-        // Key: wallet:lock:{user_id}
-        // SETNX in Redis
-        $key = "wallet:lock:{$userId}";
-        $isLocked = Redis::setnx($key, 1);
+        $lock = \Illuminate\Support\Facades\Cache::lock("wallet:lock:{$userId}", $ttl);
 
-        if ($isLocked) {
-            Redis::expire($key, $ttl);
-            return $key;
+        if ($lock->get()) {
+            return $lock;
         }
 
         return false;
     }
 
-    public function releaseLock($key)
+    public function releaseLock($lock)
     {
-        Redis::del($key);
+        if ($lock) {
+            $lock->release();
+        }
     }
 
     /**

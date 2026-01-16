@@ -2,11 +2,12 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class PaymentAttempt extends Model
 {
-     use HasFactory;
+    use HasFactory;
 
     protected $fillable = [
         'user_id',
