@@ -353,7 +353,7 @@ class WalletController extends Controller
             Log::error('PDF Statement Error: ' . $e->getMessage());
             return response()->json([
                 'error' => 'PDF Service Unavailable', 
-                'message' => 'The PDF generation service is not responding. Please make sure Docker is running.'
+                'message' => 'Unable to generate PDF statement at this time. Please try again later.'
             ], 503);
         }
     }
